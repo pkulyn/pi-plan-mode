@@ -2,8 +2,10 @@
  * Mode Manager Extension
  *
  * Claude Code-style mode workflow for pi:
- *   - /plan toggles mode management on/off
+ *   - Dormant by default: nothing is injected until you turn it on
+ *   - /plan toggles mode management on/off; Alt+M enables it and cycles
  *   - Alt+M cycles: Plan → Auto → Edit → Plan
+ *   - pi --plan starts a session directly in Plan mode (manager on)
  *
  * Modes:
  *   Plan  — read-only exploration + planning (edit/write/bash disabled)
@@ -358,8 +360,7 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify(
 			"Mode manager ON. Alt+M: switch Auto→Plan→Edit. /plan: exit.",
 			"info",
-		);
-		updateStatus(ctx);
+		);		updateStatus(ctx);
 		persistState();
 	}
 
@@ -403,7 +404,7 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 	// -----------------------------------------------------------------------
 
 	pi.registerCommand("plan", {
-		description: "Toggle mode manager (Plan/Auto/Edit; Alt+M to cycle)",
+		description: "Toggle mode manager — off by default (Plan/Auto/Edit; Alt+M to cycle)",
 		handler: async (_args, ctx) => toggleModeManager(ctx),
 	});
 
@@ -422,7 +423,7 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerShortcut(Key.alt("m"), {
-		description: "Cycle mode: Plan → Auto → Edit",
+		description: "Enable mode manager / cycle Auto→Plan→Edit",
 		handler: async (ctx) => cycleMode(ctx),
 	});
 
@@ -471,15 +472,17 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 	// Context injection & filtering
 	// -----------------------------------------------------------------------
 
-	// Filter out stale mode instructions from previous modes
+	// Filter out stale mode instructions from previous modes. Runs even while
+	// dormant: a session resumed from a Plan-mode run still carries its hidden
+	// [MODE: PLAN] message in history, and leaving it in would tell the model it
+	// is read-only while the manager is off.
 	pi.on("context", async (event) => {
-		if (!enabled) return;
-
-		const currentType = MODE_CONTEXT_TYPES[mode];
+		const allTypes = Object.values(MODE_CONTEXT_TYPES);
+		const currentType = enabled ? MODE_CONTEXT_TYPES[mode] : undefined;
 		return {
 			messages: event.messages.filter((m) => {
 				const msg = m as AgentMessage & { customType?: string };
-				if (msg.customType && Object.values(MODE_CONTEXT_TYPES).includes(msg.customType)) {
+				if (msg.customType && allTypes.includes(msg.customType)) {
 					return msg.customType === currentType;
 				}
 				return true;
@@ -555,10 +558,25 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 	// -----------------------------------------------------------------------
 
 	pi.on("session_start", async (_event, ctx) => {
-		// Default: pi-plan-mode auto-starts with every pi launch in Auto mode.
-		// The --plan flag overrides the startup mode to Plan.
-		enabled = true;
-		mode = pi.getFlag("plan") === true ? "plan" : "auto";
+		// Default: DORMANT. pi-plan-mode injects nothing and gates nothing until
+		// you turn it on with /plan or Alt+M — or launch with `pi --plan`, which
+		// starts the session directly in Plan mode.
+		const startInPlan = pi.getFlag("plan") === true;
+		enabled = startInPlan;
+		mode = startInPlan ? "plan" : "auto";
+
+		// Capture the pre-manager toolset fresh on every launch. A restored one
+		// can be stale after the tool list changed between launches, and a stale
+		// list would be applied back the moment the manager is enabled.
+		toolsBeforeModeManager = pi.getActiveTools();
+
+		if (!enabled) {
+			todoItems = [];
+			planExtractedAt = undefined;
+			allDoneNotified = false;
+			updateStatus(ctx);
+			return;
+		}
 
 		const entries = ctx.sessionManager.getEntries();
 		const modeManagerEntry = entries
@@ -572,11 +590,9 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 			.pop() as { data?: ModeManagerState } | undefined;
 
 		if (modeManagerEntry?.data) {
-			// Restore progress and the pre-pi-plan-mode toolset. `enabled` and
-			// `mode` are NOT restored: the manager auto-starts in Auto mode on
-			// every launch (unless --plan), so a manual /plan-off does not persist.
+			// Restore progress. `enabled` and `mode` are NOT restored: the manager
+			// only runs because /plan, Alt+M or --plan asked for it.
 			todoItems = modeManagerEntry.data.todos ?? todoItems;
-			toolsBeforeModeManager = modeManagerEntry.data.toolsBeforeModeManager ?? toolsBeforeModeManager;
 			planExtractedAt = modeManagerEntry.data.planExtractedAt;
 
 			// Re-scan assistant messages after the plan was extracted to rebuild
@@ -590,11 +606,6 @@ export default function modeManagerExtension(pi: ExtensionAPI): void {
 			recoverPlanFromHistory(ctx);
 		}
 
-		// Auto mode restores the pre-pi-plan-mode toolset; capture it now so a
-		// full toolset is preserved (never []).
-		if (toolsBeforeModeManager === undefined) {
-			toolsBeforeModeManager = pi.getActiveTools();
-		}
 		applyModeTools();
 		updateStatus(ctx);
 	});

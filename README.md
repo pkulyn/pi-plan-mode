@@ -20,14 +20,15 @@ The live todo widget sits below the editor: a `Plan (2/5)` heading on a timeline
 
 ## Features
 
-- 🔄 **`Alt+M`** cycles modes: Auto → Plan → Edit
+- 😴 **Dormant by default** — a fresh session injects no mode instructions, gates no tools and shows no status chip; `/plan` or `Alt+M` turns it on, `pi --plan` starts a session already in Plan mode
+- 🔄 **`Alt+M`** enables the manager and cycles modes: Auto → Plan → Edit
 - 🔒 **Hard gate** on tool calls — Plan mode rejects `edit`/`write`/`bash` before the agent sees them; Edit mode prompts for bash approval
 - 📋 **Live todo widget** (below the editor) — numbered plan steps with progress counter (`Plan (2/5)`), pending/current/done glyphs (`◐`/`○`/`✓`) **colored to match the active mode** (teal in Plan, orange-red in Auto, blue in Edit), auto-hides when the plan completes
 - ✨ **Two-column layout** — todo lists > 5 items split into side-by-side columns (CJK-width aware, truncation-safe)
 - ✅ **`[DONE:n]` protocol** — cumulative semantics: `[DONE:3]` marks steps 1–3 complete; `[DONE:all]`/`[DONE:*]` marks everything
 - 🧠 **Mode instructions injected into context** — the agent knows which mode is active and what its rules are
-- 💾 **Session persistence** — todos survive restarts (the manager always auto-starts in Auto mode unless `--plan`); plans are recovered from session history even if the extension was enabled after the plan was written
-- ⌨️ **`/plan` toggle** and `--plan` CLI flag (start pi directly in Plan mode); the manager **auto-starts in Auto mode** on every launch, no manual enabling needed
+- 💾 **Session persistence** — todos survive restarts (the on/off state is deliberately *not* restored: the manager only runs when `/plan`, `Alt+M` or `--plan` asked for it); plans are recovered from session history even if the extension was enabled after the plan was written
+- ⌨️ **`/plan` toggle** and `--plan` CLI flag (start pi directly in Plan mode); the manager stays **dormant by default** and never changes your toolset until you enable it
 
 ## Installation
 
@@ -55,14 +56,15 @@ The extension auto-loads on the next pi session. Requires **pi ≥ 0.80** and **
 
 | Action | Result |
 |--------|--------|
-| `/plan` | Toggle mode manager on/off |
-| `Alt+M` | Cycle mode: Auto → Plan → Edit |
+| `/plan` | Toggle mode manager on/off (off by default) |
+| `Alt+M` | Enable the manager, then cycle mode: Auto → Plan → Edit |
 | `/todos` | Show the current plan todo list |
-| `pi --plan` | Start pi with Plan mode already active |
+| `pi --plan` | Start pi with the manager enabled and Plan mode already active |
 
 ### Workflow
 
-1. pi starts with the mode manager **auto-enabled in Auto mode** (or `pi --plan` to start directly in Plan mode). Press `Alt+M` to enter **Plan**: the agent explores the codebase and produces a plan wrapped in a `<todo>` block. Tools that modify anything are blocked.
+1. pi starts with the mode manager **dormant**: no mode instructions in context, no tool gating, no status chip. Enable it with `/plan` or `Alt+M` (or launch `pi --plan` to go straight into Plan mode).
+2. Once enabled, press `Alt+M` to enter **Plan**: the agent explores the codebase and produces a plan wrapped in a `<todo>` block. Tools that modify anything are blocked.
 2. Press `Alt+M` to cycle **Auto → Plan → Edit → Auto**: **Auto** executes directly, **Edit** is focused editing with bash approval.
 3. As the agent executes each step it reports `[DONE:n]`. The todo widget ticks up `(1/5) → (5/5)` and collapses with a 🎉 notification when the plan is done.
 
@@ -96,7 +98,7 @@ Only **standalone** markers count — markers inside range/list expressions such
 - **Tool gating** — `tool_call` interception returns `{ block: true, reason }` for disallowed tools; no shell-level sandboxing
 - **Plan extraction** — scans assistant messages for `Plan:` headers + numbered lists (`extractTodoItems`), cleans step text (verb-stripping, markdown removal, truncation)
 - **Progress tracking** — `turn_end` parses `[DONE:n]` markers (standalone only; range expressions ignored); the completion toast fires only when a turn actually transitions the plan to fully done, so it never re-fires on a restored/already-finished plan. Completion state is rebuilt from session history on restore, so the widget survives restarts
-- **Context injection** — `before_agent_start` inserts mode instructions (tagged `customType`) filtered by `context` interception
+- **Context injection** — `before_agent_start` inserts mode instructions (tagged `customType`) filtered by `context` interception. While the manager is dormant, `context` still runs so that stale `[MODE: …]` messages from an earlier Plan-mode run are stripped — otherwise a resumed session would tell the agent it is read-only with no way to leave
 
 ## Development
 
