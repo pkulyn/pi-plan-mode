@@ -13,4 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # utils.ts imports @earendil-works/pi-tui (a peer dependency), so the
+      # tests need the peer deps installed before they can run.
+      - run: npm install --no-audit --no-fund
       - run: node --test "test/**/*.test.ts"
